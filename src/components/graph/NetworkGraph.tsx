@@ -33,7 +33,6 @@ const NetworkGraph = () => {
             // ... (기존 렌더링 로직 복붙 유지) ...
             const isRisk = node.group === 'risk';
             const isExchange = node.group === 'exchange';
-            const isDanger = isRisk || isExchange;
             const baseR = isStart ? 12 : (isDbMatched ? 10 : 6);
             const r = baseR;
 

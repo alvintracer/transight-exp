@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GraphData, GraphNode, GraphLink } from '../types/graph';
+import type { GraphNode, GraphLink } from '../types/graph';
 import { supabase } from '../lib/supabaseClient';
 
 // [수정] customColor 속성 추가

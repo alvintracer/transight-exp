@@ -64,7 +64,7 @@ export const useDeepTrace = () => {
       if (abortRef.current) break;
 
       if (currentLayer.size === 0) {
-        setTraceLog(prev => [`✅ Trace finished early at Hop ${hop-1}`]);
+        setTraceLog(()=> [`✅ Trace finished early at Hop ${hop-1}`]);
         break;
       }
 
