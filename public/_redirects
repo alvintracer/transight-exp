@@ -1,0 +1,5 @@
+# TronScan API Proxy
+/api/tronscan/* https://apilist.tronscanapi.com/* 200
+
+# SPA Routing (새로고침 시 404 방지용 - 필수)
+/* /index.html  200
