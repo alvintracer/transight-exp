@@ -25,7 +25,7 @@ const PROXY_BASE_URL = '/api/tronscan/api';
 class RequestQueue {
   private queue: Array<() => Promise<any>> = [];
   private isProcessing = false;
-  private delayMs = 1500; // TronScan은 1.5초에 1번만 호출하도록 제한 (안전빵)
+  private delayMs = 1000; // 딜레이를 1초로 약간 줄임
 
   add<T>(task: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -49,7 +49,6 @@ class RequestQueue {
       const task = this.queue.shift();
       if (task) {
         await task();
-        // 다음 요청 전 강제 휴식
         await new Promise(r => setTimeout(r, this.delayMs));
       }
     }
@@ -58,45 +57,10 @@ class RequestQueue {
   }
 }
 
-// 전역 큐 인스턴스 생성
 const tronScanQueue = new RequestQueue();
 
-
 // ==========================================
-// 2. QuickNode RPC 시도 (TRX History)
-// ==========================================
-const fetchTrxViaQuickNode = async (address: string, limit: number): Promise<CleanTx[]> => {
-  try {
-    // QuickNode/TronWeb 표준 API로 과거 내역 시도
-    // 주의: 노드 설정에 따라 빈 배열[]이 올 수 있음
-    // @ts-ignore
-    const txs = await tronWeb.trx.getTransactionsRelated(address, "all", limit);
-    
-    if (!txs || txs.length === 0) return [];
-
-    console.log(`⚡ Fetched ${txs.length} TXs via QuickNode for ${address}`);
-
-    return txs.map((tx: any) => {
-        const raw = tx.raw_data.contract[0].parameter.value;
-        return {
-            txID: tx.txID,
-            sender: tronWeb.address.fromHex(raw.owner_address),
-            receiver: tronWeb.address.fromHex(raw.to_address),
-            amount: (raw.amount || 0) / 1_000_000,
-            token: 'TRX',
-            timestamp: tx.raw_data.timestamp
-        };
-    }).filter((t: CleanTx) => t.amount >= MIN_AMOUNT);
-
-  } catch (e) {
-    // QuickNode가 지원 안 하면 조용히 실패하고 TronScan으로 넘어감
-    return [];
-  }
-};
-
-
-// ==========================================
-// 3. 메인 스캐너 함수 (Hybrid)
+// 2. 메인 스캐너 함수 (QuickNode History 제거됨)
 // ==========================================
 export const fetchAddressTransactions = async (
   address: string, 
@@ -107,57 +71,51 @@ export const fetchAddressTransactions = async (
 
   const transactions: CleanTx[] = [];
 
-  // [STEP 1] QuickNode RPC로 TRX 내역 조회 시도 (빠름)
-  const quickNodeTxs = await fetchTrxViaQuickNode(address, limit);
-  if (quickNodeTxs.length > 0) {
-      // 성공하면 이거 씀 (필터링해서)
-      quickNodeTxs.forEach(tx => {
-          if (tx.timestamp >= sinceTimestamp) transactions.push(tx);
-      });
-  } else {
-      // [STEP 2] 실패하면 TronScan API 사용 (느리지만 확실함, Queue 사용)
-      try {
-        const fetchTrx = async () => {
-             const url = `${PROXY_BASE_URL}/transaction?sort=-timestamp&count=true&limit=${limit * 2}&start=0&address=${address}`;
-             const res = await fetch(url);
-             if (!res.ok) throw new Error(res.statusText);
-             return await res.json();
-        };
+  // [수정됨] QuickNode 호출 코드 삭제함.
+  // 이유: QuickNode는 getTransactionsRelated 메서드(History)를 지원하지 않아 400 에러 발생.
+  // 따라서 무조건 TronScan API(프록시)를 사용하도록 변경.
 
-        // 큐에 넣어서 실행 (429 방지)
-        const data = await tronScanQueue.add(fetchTrx);
+  // [STEP 1] TronScan API 사용 (TRX)
+  try {
+    const fetchTrx = async () => {
+         // limit * 3으로 넉넉하게 요청
+         const url = `${PROXY_BASE_URL}/transaction?sort=-timestamp&count=true&limit=${limit * 3}&start=0&address=${address}`;
+         const res = await fetch(url);
+         if (!res.ok) throw new Error(`TronScan Error: ${res.status}`);
+         return await res.json();
+    };
 
-        if (data?.data) {
-            data.data.forEach((tx: any) => {
-                if (tx.timestamp < sinceTimestamp) return;
-                const amount = parseFloat(tx.amount) / 1_000_000;
-                if (tx.contractType === 1 && amount >= MIN_AMOUNT) {
-                    transactions.push({
-                        txID: tx.hash,
-                        sender: tx.ownerAddress,
-                        receiver: tx.toAddress,
-                        amount: amount,
-                        token: 'TRX',
-                        timestamp: tx.timestamp
-                    });
-                }
-            });
-        }
-      } catch (e) {
-        console.warn(`TronScan TRX failed for ${address}:`, e);
-      }
+    const data = await tronScanQueue.add(fetchTrx);
+
+    if (data?.data) {
+        data.data.forEach((tx: any) => {
+            if (tx.timestamp < sinceTimestamp) return;
+            const amount = parseFloat(tx.amount) / 1_000_000;
+            if (tx.contractType === 1 && amount >= MIN_AMOUNT) {
+                transactions.push({
+                    txID: tx.hash,
+                    sender: tx.ownerAddress,
+                    receiver: tx.toAddress,
+                    amount: amount,
+                    token: 'TRX',
+                    timestamp: tx.timestamp
+                });
+            }
+        });
+    }
+  } catch (e) {
+    console.warn(`TronScan TRX failed for ${address}:`, e);
   }
 
-  // [STEP 3] USDT 조회 (RPC로는 조회가 매우 어려우므로 TronScan Queue 사용)
+  // [STEP 2] TronScan API 사용 (USDT)
   try {
     const fetchUsdt = async () => {
-        const trc20Url = `${PROXY_BASE_URL}/token_trc20/transfers?limit=${limit * 2}&start=0&sort=-timestamp&count=true&relatedAddress=${address}&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`;
+        const trc20Url = `${PROXY_BASE_URL}/token_trc20/transfers?limit=${limit * 3}&start=0&sort=-timestamp&count=true&relatedAddress=${address}&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`;
         const res = await fetch(trc20Url);
-        if (!res.ok) throw new Error(res.statusText);
+        if (!res.ok) throw new Error(`TronScan Error: ${res.status}`);
         return await res.json();
     };
 
-    // 큐에 넣어서 실행
     const trcData = await tronScanQueue.add(fetchUsdt);
 
     if (trcData?.token_transfers) {
@@ -180,17 +138,29 @@ export const fetchAddressTransactions = async (
       console.warn(`TronScan USDT failed for ${address}:`, e);
   }
   
-  // 최신순 정렬
   return transactions.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
 };
 
 
 // ==========================================
-// 4. 계정 상세 정보 (큐 적용)
+// 3. 계정 상세 정보 (잔고는 QuickNode 사용 가능)
 // ==========================================
 export const fetchAccountDetail = async (address: string): Promise<AccountDetail | null> => {
+  // 1순위: QuickNode RPC (잔고 조회는 매우 빠르고 정확함)
   try {
-    // 이것도 429 날 수 있으므로 큐 사용
+     // @ts-ignore
+     const acc = await tronWeb.trx.getAccount(address);
+     if (acc && Object.keys(acc).length > 0) {
+        // USDT 찾기 (TRC20은 RPC로 바로 안나올 수 있어서 여기서는 TRX만 확실히 챙김)
+        // 하지만 QuickNode도 getAccount에서 trc20 토큰 잔고를 완벽히 안 줄 수 있음.
+        // 안전하게 TronScan API를 쓰는게 낫습니다.
+     }
+  } catch(e) {
+     // RPC 실패시 패스
+  }
+
+  // 결론: 일관성을 위해 Account Detail도 TronScan API(Proxy)를 씁니다.
+  try {
     const fetchDetail = async () => {
         const response = await fetch(`${PROXY_BASE_URL}/account?address=${address}`);
         if (!response.ok) throw new Error('Failed');
@@ -212,7 +182,6 @@ export const fetchAccountDetail = async (address: string): Promise<AccountDetail
   }
 };
 
-// 단순 히스토리
 export const fetchRecentHistory = async (address: string): Promise<CleanTx[]> => {
     return fetchAddressTransactions(address, 0);
 };
