@@ -13,7 +13,7 @@ import { supabase } from './lib/supabaseClient';
 type AppMode = 'bigbrother' | 'autotracer';
 
 function App() {
-const { addNodes, graphData, session, setSession } = useGlobalStore();
+const { addNodes, graphData, session, setSession, layoutMode, setLayoutMode, isPhysicsActive, setIsPhysicsActive} = useGlobalStore();
 const [mode, setMode] = useState<AppMode>('bigbrother');
 
   // -- Auth Init --
@@ -104,7 +104,7 @@ const [mode, setMode] = useState<AppMode>('bigbrother');
       <div className="flex-1">
         <NetworkGraph />
       </div>
-
+    
 
 
       {/* 2. 좌측 상단: 타이틀 & 모드 스위처 */}
@@ -115,19 +115,38 @@ const [mode, setMode] = useState<AppMode>('bigbrother');
           </span>
         </h1>
         
-        {/* 모드 탭 */}
+        {/* 모드 스위처 (BigBrother vs AutoTracer) */}
         <div className="bg-white/90 backdrop-blur rounded-full p-1 shadow-md border border-slate-200 flex w-fit">
+            <button onClick={() => { setMode('bigbrother'); setIsMonitoring(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'bigbrother' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>BigBrother</button>
+            <button onClick={() => setMode('autotracer')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'autotracer' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>AutoTracer</button>
+        </div>
+
+        {/* [New] 레이아웃 모드 스위처 (Free vs Tree) */}
+        <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-300">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Layout</span>
+            <div className="bg-white/90 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200 flex w-fit">
+                <button 
+                  onClick={() => setLayoutMode('physics')} 
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${layoutMode === 'physics' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}
+                >
+                   🕸️ Free
+                </button>
+                <button 
+                  onClick={() => setLayoutMode('horizontal')} 
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${layoutMode === 'horizontal' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}
+                >
+                   🌳 Tree
+                </button>
+            </div>
+        </div>
+        {/* 2. Physics Toggle (Freeze) */}
+        <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase w-10">Physics</span>
             <button 
-                onClick={() => { setMode('bigbrother'); setIsMonitoring(false); }}
-                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'bigbrother' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}
+                onClick={() => setIsPhysicsActive(!isPhysicsActive)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border shadow-sm flex items-center gap-2 ${isPhysicsActive ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200' : 'bg-red-100 text-red-700 border-red-200 hover:bg-red-200'}`}
             >
-                BigBrother
-            </button>
-            <button 
-                onClick={() => setMode('autotracer')}
-                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mode === 'autotracer' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}
-            >
-                AutoTracer
+                {isPhysicsActive ? '⚡ Active' : '❄️ Frozen'}
             </button>
         </div>
       </div>
@@ -341,6 +360,7 @@ const [mode, setMode] = useState<AppMode>('bigbrother');
       <ClusterPanel />
 
       {/* 6. 우측 하단: Alert 패널 */}
+      {mode === 'bigbrother' && (
       <div className="absolute bottom-6 right-6 w-80 bg-white/95 backdrop-blur border border-red-100 shadow-2xl rounded-xl p-4 z-10">
          <h3 className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
             <span className="flex items-center gap-2">🚨 Threat Detection</span>
@@ -360,6 +380,7 @@ const [mode, setMode] = useState<AppMode>('bigbrother');
             }
          </div>
       </div>
+      )}
 
       {/* 7. 상세 패널 (슬라이드) */}
       <DetailPanel />

@@ -1,15 +1,17 @@
 [build]
+  # Vite 빌드 명령어
   command = "npm run build"
+  # Vite가 결과물을 뱉는 폴더명 (보통 dist)
   publish = "dist"
 
-# 프록시 설정 (이게 _redirects 보다 강력합니다)
+# [중요] 프록시 설정
 [[redirects]]
   from = "/api/tronscan/*"
   to = "https://apilist.tronscanapi.com/:splat"
   status = 200
   force = true
 
-# SPA 라우팅 (새로고침 404 방지)
+# [중요] SPA 라우팅 (새로고침 시 404 방지)
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -20,12 +20,38 @@ const MIN_AMOUNT = 1.0;
 const PROXY_BASE_URL = '/api/tronscan/api';
 
 // ==========================================
-// 1. API 요청 큐 (Rate Limit 방지기)
+// [New] API Key Rotation System
+// ==========================================
+// 1. 환경변수에서 콤마로 구분된 키들을 배열로 변환
+const RAW_KEYS = import.meta.env.VITE_TRONSCAN_API_KEYS || '';
+const API_KEYS = RAW_KEYS.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0);
+
+let currentKeyIndex = 0;
+
+// 2. 키를 순서대로 하나씩 꺼내주는 함수 (Round Robin)
+const getNextApiKey = (): string | null => {
+  if (API_KEYS.length === 0) return null;
+  const key = API_KEYS[currentKeyIndex];
+  // 다음 인덱스로 이동 (끝에 다다르면 다시 0번으로)
+  currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
+  return key;
+};
+
+// 로그로 키 개수 확인 (개발자 도구에서 확인용)
+if (API_KEYS.length > 0) {
+    console.log(`✅ ${API_KEYS.length} TronScan API Keys loaded for rotation.`);
+} else {
+    console.warn('⚠️ No TronScan API Keys found. Rate limits will be strict.');
+}
+
+// ==========================================
+// Request Queue (Rate Limit 방지기)
 // ==========================================
 class RequestQueue {
   private queue: Array<() => Promise<any>> = [];
   private isProcessing = false;
-  private delayMs = 1000; // 딜레이를 1초로 약간 줄임
+  // 키가 많아졌으니 딜레이를 0.3초로 확 줄여서 속도를 높입니다! (기존 1초)
+  private delayMs = 300; 
 
   add<T>(task: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -60,7 +86,7 @@ class RequestQueue {
 const tronScanQueue = new RequestQueue();
 
 // ==========================================
-// 2. 메인 스캐너 함수 (QuickNode History 제거됨)
+// Main Scanner Functions
 // ==========================================
 export const fetchAddressTransactions = async (
   address: string, 
@@ -71,16 +97,23 @@ export const fetchAddressTransactions = async (
 
   const transactions: CleanTx[] = [];
 
-  // [수정됨] QuickNode 호출 코드 삭제함.
-  // 이유: QuickNode는 getTransactionsRelated 메서드(History)를 지원하지 않아 400 에러 발생.
-  // 따라서 무조건 TronScan API(프록시)를 사용하도록 변경.
-
-  // [STEP 1] TronScan API 사용 (TRX)
+  // [STEP 1] TRX History
   try {
     const fetchTrx = async () => {
-         // limit * 3으로 넉넉하게 요청
          const url = `${PROXY_BASE_URL}/transaction?sort=-timestamp&count=true&limit=${limit * 3}&start=0&address=${address}`;
-         const res = await fetch(url);
+         
+         // [핵심] 요청할 때마다 새 키를 가져옴
+         const apiKey = getNextApiKey(); 
+         
+         const options = {
+             method: 'GET',
+             headers: {
+                 'Content-Type': 'application/json',
+                 ...(apiKey ? { 'TRON-PRO-API-KEY': apiKey } : {})
+             }
+         };
+
+         const res = await fetch(url, options);
          if (!res.ok) throw new Error(`TronScan Error: ${res.status}`);
          return await res.json();
     };
@@ -107,11 +140,22 @@ export const fetchAddressTransactions = async (
     console.warn(`TronScan TRX failed for ${address}:`, e);
   }
 
-  // [STEP 2] TronScan API 사용 (USDT)
+  // [STEP 2] USDT (TRC20) History
   try {
     const fetchUsdt = async () => {
         const trc20Url = `${PROXY_BASE_URL}/token_trc20/transfers?limit=${limit * 3}&start=0&sort=-timestamp&count=true&relatedAddress=${address}&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`;
-        const res = await fetch(trc20Url);
+        
+        const apiKey = getNextApiKey(); // 키 교체
+
+        const options = {
+             method: 'GET',
+             headers: {
+                 'Content-Type': 'application/json',
+                 ...(apiKey ? { 'TRON-PRO-API-KEY': apiKey } : {})
+             }
+         };
+
+        const res = await fetch(trc20Url, options);
         if (!res.ok) throw new Error(`TronScan Error: ${res.status}`);
         return await res.json();
     };
@@ -141,28 +185,19 @@ export const fetchAddressTransactions = async (
   return transactions.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
 };
 
-
-// ==========================================
-// 3. 계정 상세 정보 (잔고는 QuickNode 사용 가능)
-// ==========================================
 export const fetchAccountDetail = async (address: string): Promise<AccountDetail | null> => {
-  // 1순위: QuickNode RPC (잔고 조회는 매우 빠르고 정확함)
-  try {
-     // @ts-ignore
-     const acc = await tronWeb.trx.getAccount(address);
-     if (acc && Object.keys(acc).length > 0) {
-        // USDT 찾기 (TRC20은 RPC로 바로 안나올 수 있어서 여기서는 TRX만 확실히 챙김)
-        // 하지만 QuickNode도 getAccount에서 trc20 토큰 잔고를 완벽히 안 줄 수 있음.
-        // 안전하게 TronScan API를 쓰는게 낫습니다.
-     }
-  } catch(e) {
-     // RPC 실패시 패스
-  }
-
-  // 결론: 일관성을 위해 Account Detail도 TronScan API(Proxy)를 씁니다.
   try {
     const fetchDetail = async () => {
-        const response = await fetch(`${PROXY_BASE_URL}/account?address=${address}`);
+        const apiKey = getNextApiKey(); // 키 교체
+        const options = {
+             method: 'GET',
+             headers: {
+                 'Content-Type': 'application/json',
+                 ...(apiKey ? { 'TRON-PRO-API-KEY': apiKey } : {})
+             }
+         };
+
+        const response = await fetch(`${PROXY_BASE_URL}/account?address=${address}`, options);
         if (!response.ok) throw new Error('Failed');
         return await response.json();
     };
